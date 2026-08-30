@@ -4,10 +4,12 @@ import csv
 import time
 
 import bpy
+import numpy as np
 from bpy.props import StringProperty
 
 from . import matching
-from .similarity import cosine_similarity_matrix, greedy_assignment, subsample_indices
+from .similarity import (complete_assignment, cosine_similarity_matrix,
+                         greedy_assignment, subsample_indices)
 
 
 def _group_names(obj):
@@ -63,6 +65,7 @@ class WEIGHTMATCH_OT_auto_match(bpy.types.Operator):
         t0 = time.time()
         assignment = {}
         locked_src, locked_tgt = set(), set()
+        sim = None
         if s.match_mode != 'NAME' and s.prefer_same_name:
             for si, name in enumerate(src_names):
                 if name in tgt_names:
@@ -94,6 +97,14 @@ class WEIGHTMATCH_OT_auto_match(bpy.types.Operator):
                 sim, s.similarity_threshold, s.allow_merge,
                 locked_src, locked_tgt))
 
+        force_filled = 0
+        if s.force_match_all:
+            if sim is None:  # NAME mode: no similarity signal, fill arbitrarily
+                sim = np.zeros((len(src_names), len(tgt_names)), dtype=np.float32)
+            before = len(assignment)
+            complete_assignment(sim, assignment, locked_tgt)
+            force_filled = len(assignment) - before
+
         s.items.clear()
         for si, name in enumerate(src_names):
             item = s.items.add()
@@ -105,10 +116,11 @@ class WEIGHTMATCH_OT_auto_match(bpy.types.Operator):
                 item.similarity = float(score)
 
         matched = sum(1 for it in s.items if it.target_name)
-        self.report(
-            {'INFO'},
-            f"Matched {matched}/{len(src_names)} source groups "
-            f"in {time.time() - t0:.2f}s ({s.match_mode} mode)")
+        msg = (f"Matched {matched}/{len(src_names)} source groups "
+               f"in {time.time() - t0:.2f}s ({s.match_mode} mode)")
+        if force_filled:
+            msg += f", force-filled {force_filled} without a strong match"
+        self.report({'INFO'}, msg)
         return {'FINISHED'}
 
 

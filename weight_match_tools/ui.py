@@ -46,6 +46,7 @@ class WEIGHTMATCH_PT_main(bpy.types.Panel):
             col.prop(s, "sample_limit")
         col.prop(s, "prefer_same_name")
         col.prop(s, "allow_merge")
+        col.prop(s, "force_match_all")
         col.prop(s, "use_selected_only")
         col.operator("weight_match.auto_match", icon='SNAP_ON')
 

@@ -12,8 +12,8 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "weight_match_tools"))
 
-from similarity import (cosine_similarity_matrix, greedy_assignment,
-                        normalized_name, subsample_indices)
+from similarity import (complete_assignment, cosine_similarity_matrix,
+                        greedy_assignment, normalized_name, subsample_indices)
 
 failures = []
 
@@ -79,6 +79,26 @@ check(2 not in a, "C left unmatched with merge off: its targets are taken")
 print("greedy_assignment (threshold)")
 a = greedy_assignment(sim, threshold=0.8)
 check(set(a) == {0, 1, 2}, "only the 1.0 pairs survive a high threshold")
+
+print("complete_assignment (force fill)")
+# 6 source groups over 3 verts; A and D identical, C/E/F all-zero (empty)
+groups = np.array([[1.0, 0.0, 0.5],   # A
+                   [0.0, 1.0, 0.0],   # B
+                   [0.0, 0.0, 0.0],   # C (empty)
+                   [1.0, 0.0, 0.5],   # D == A
+                   [0.0, 0.0, 0.0],   # E (empty)
+                   [0.0, 0.0, 0.0]])  # F (empty)
+verts2 = groups.T                      # (3 verts, 6 groups)
+tgt2 = np.eye(3)                       # targets X, Y, Z
+sim2 = cosine_similarity_matrix(verts2, tgt2)
+partial = greedy_assignment(sim2, threshold=0.6)
+full = complete_assignment(sim2, dict(partial))
+check(len(full) == 6, "every source column ends up assigned")
+check(full[0][0] == 0, "A -> X")
+check(full[1][0] == 1, "B -> Y")
+check(full[3][0] == 2, "duplicate D takes the still-free Z before empties")
+check(all(t in (0, 1, 2) for _, (t, _) in full.items()), "targets stay in range")
+check(all(v >= 0.0 for _, (_, v) in full.items()), "recorded similarities sane")
 
 print("subsample_indices")
 sub = subsample_indices(list(range(100)), 10)

@@ -217,6 +217,45 @@ count = sum(1 for v in msrc.data.vertices
             for g in v.groups if g.group == bvg.index)
 check(count == 6, f"merge: 6 vertices in merged 'B' (got {count})")
 
+print("=== Scenario E: force match all -> source ends up with target's names ===")
+clear_scene()
+fsrc = new_sphere("src_force", (0.0, 0.0, 0.0), 16)
+paint(fsrc, "a", lambda co: clamp(co.z))       # will match 'x'
+paint(fsrc, "b", lambda co: clamp(-co.z))      # will match 'y'
+fsrc.vertex_groups.new(name="e1")              # empty -> must still get a number
+fsrc.vertex_groups.new(name="e2")
+
+ftgt = new_sphere("tgt_force", (4.0, 0.0, 0.0), 16)
+paint(ftgt, "x", lambda co: clamp(co.z))
+paint(ftgt, "y", lambda co: clamp(-co.z))
+ftgt.vertex_groups.new(name="z")
+
+s = bpy.context.scene.weight_match
+s.source_object = fsrc
+s.target_object = ftgt
+s.match_mode = 'WEIGHT'
+s.similarity_threshold = 0.6
+s.force_match_all = True
+bpy.ops.weight_match.auto_match()
+
+mapping = {k: v[0] for k, v in mapping_of(s).items()}
+check(len(s.items) == 4 and all(it.target_name for it in s.items),
+      f"force: every source group got a target (got {mapping})")
+check(mapping.get("a") == "x" and mapping.get("b") == "y",
+      f"force: strong pairs untouched (got {mapping})")
+check(len({it.target_name for it in s.items}) == 3,
+      "force: surplus groups share targets (many-to-one)")
+a_count = sum(1 for v in fsrc.data.vertices
+              for g in v.groups if g.group == fsrc.vertex_groups["a"].index)
+bpy.ops.weight_match.apply_rename()
+names = {vg.name for vg in fsrc.vertex_groups}
+check(names == {"x", "y", "z"},
+      f"force+apply: source groups == target's set (got {sorted(names)})")
+xvg = fsrc.vertex_groups["x"]
+x_count = sum(1 for v in fsrc.data.vertices
+              for g in v.groups if g.group == xvg.index)
+check(x_count == a_count, f"force+apply: 'x' kept 'a' weights ({x_count} == {a_count})")
+
 print()
 result_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "last_headless_result.txt")

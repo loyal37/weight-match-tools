@@ -115,6 +115,15 @@ class WeightMatchSettings(bpy.types.PropertyGroup):
                     "(their weights are merged on Apply)",
         default=False,
     )
+    force_match_all: BoolProperty(
+        name="Match All (Force)",
+        description="Give every unmatched source group a target too: good "
+                    "matches keep their 1:1 pairs, the rest take the closest "
+                    "remaining target (empty groups go last).  Use this when "
+                    "the source must end up with exactly the target's group "
+                    "names, e.g. numeric bone ids 0..N",
+        default=False,
+    )
     use_selected_only: BoolProperty(
         name="Selected Vertices Only",
         description="Only consider selected vertices of the target object "

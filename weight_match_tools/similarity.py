@@ -73,6 +73,36 @@ def greedy_assignment(similarity, threshold, allow_merge=False,
     return assignment
 
 
+def complete_assignment(similarity, assignment, locked_tgt=()):
+    """Fill ``assignment`` so every source column ends up with a target.
+
+    Used for "Match All (Force)": remaining sources are processed best-first
+    (by their best similarity over the still-free targets, so groups with
+    real weights claim their counterparts before empty/noise groups) and
+    each takes its best free target.  Once no free target is left, the rest
+    share the closest already-used target (weights merge on Apply).  Empty
+    groups carry no weights, so their forced renames are no-ops deformation
+    wise.
+    """
+    sim = np.asarray(similarity)
+    n_src, n_tgt = sim.shape
+    used_t = {t for t, _ in assignment.values()}
+    used_t.update(locked_tgt)
+    remaining = [s for s in range(n_src) if s not in assignment]
+
+    def best_free(s):
+        free = [t for t in range(n_tgt) if t not in used_t]
+        pool = free if free else range(n_tgt)
+        return max((float(sim[s, t]), t) for t in pool)
+
+    order = sorted(((best_free(s)[0], s) for s in remaining), reverse=True)
+    for _, s in order:
+        value, t = best_free(s)
+        assignment[s] = (t, value)
+        used_t.add(t)
+    return assignment
+
+
 def subsample_indices(indices, limit):
     """Evenly thin a list of vertex indices down to at most ``limit`` entries."""
     indices = list(indices)
