@@ -256,6 +256,37 @@ x_count = sum(1 for v in fsrc.data.vertices
               for g in v.groups if g.group == xvg.index)
 check(x_count == a_count, f"force+apply: 'x' kept 'a' weights ({x_count} == {a_count})")
 
+print("=== Scenario F: force + merge -> weak source joins its true region ===")
+clear_scene()
+wsrc = new_sphere("src_weak", (0.0, 0.0, 0.0), 24)
+paint(wsrc, "p", lambda co: clamp(co.z))                  # strong: matches 'top'
+paint(wsrc, "w", lambda co: 0.5 * clamp(co.z - 0.7))      # weak top-cap blob
+wsrc.vertex_groups.new(name="e1")                          # empty
+wsrc.vertex_groups.new(name="e2")                          # empty
+
+wtgt = new_sphere("tgt_weak", (4.0, 0.0, 0.0), 24)
+paint(wtgt, "top", lambda co: clamp(co.z))
+paint(wtgt, "mid", lambda co: clamp(1.0 - abs(co.z) * 2))
+paint(wtgt, "foot", lambda co: clamp(-co.z))
+
+s = bpy.context.scene.weight_match
+s.source_object = wsrc
+s.target_object = wtgt
+s.match_mode = 'WEIGHT'
+s.similarity_threshold = 0.995   # push the weak blob into the force-fill pass
+s.force_match_all = True
+s.allow_merge = True
+bpy.ops.weight_match.auto_match()
+mapping = {k: v[0] for k, v in mapping_of(s).items()}
+check(mapping.get("p") == "top", f"strong pair kept (got {mapping})")
+check(mapping.get("w") == "top",
+      f"weak top blob merges into already-taken 'top', not a free wrong one "
+      f"(got {mapping})")
+check(mapping.get("e1") in ("mid", "foot") and mapping.get("e2") in ("mid", "foot")
+      and mapping.get("e1") != mapping.get("e2"),
+      f"empties spread over the free targets (got {mapping})")
+s.similarity_threshold = 0.6
+
 print()
 result_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "last_headless_result.txt")

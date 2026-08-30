@@ -73,32 +73,52 @@ def greedy_assignment(similarity, threshold, allow_merge=False,
     return assignment
 
 
-def complete_assignment(similarity, assignment, locked_tgt=()):
+def complete_assignment(similarity, assignment, locked_tgt=(), allow_merge=False):
     """Fill ``assignment`` so every source column ends up with a target.
 
-    Used for "Match All (Force)": remaining sources are processed best-first
-    (by their best similarity over the still-free targets, so groups with
-    real weights claim their counterparts before empty/noise groups) and
-    each takes its best free target.  Once no free target is left, the rest
-    share the closest already-used target (weights merge on Apply).  Empty
-    groups carry no weights, so their forced renames are no-ops deformation
-    wise.
+    Used for "Match All (Force)".  Sources with a real weight signal are
+    placed first, best similarity first:
+
+    * with ``allow_merge`` a source whose best target is already taken is
+      merged into it anyway - e.g. a weakly weighted source breast bone joins
+      the target bone that owns that region instead of grabbing an unrelated
+      free one;
+    * without ``allow_merge`` sources claim the best still-free target, so
+      the mapping stays 1:1 as long as possible.
+
+    All-zero sources (empty groups) go last: they spread over the remaining
+    free targets and only share targets once none are left, so their forced
+    renames never pollute real weights.
     """
     sim = np.asarray(similarity)
     n_src, n_tgt = sim.shape
     used_t = {t for t, _ in assignment.values()}
     used_t.update(locked_tgt)
+
     remaining = [s for s in range(n_src) if s not in assignment]
+    row_max = sim.max(axis=1) if n_tgt else np.zeros(0)
+    weighted = [s for s in remaining if row_max[s] > 0.0]
+    empties = [s for s in remaining if row_max[s] <= 0.0]
 
-    def best_free(s):
-        free = [t for t in range(n_tgt) if t not in used_t]
-        pool = free if free else range(n_tgt)
-        return max((float(sim[s, t]), t) for t in pool)
+    if allow_merge:
+        def place(s):
+            t = int(np.argmax(sim[s]))
+            return float(sim[s, t]), t
+    else:
+        def place(s):
+            free = [t for t in range(n_tgt) if t not in used_t]
+            pool = free if free else range(n_tgt)
+            return max((float(sim[s, t]), t) for t in pool)
 
-    order = sorted(((best_free(s)[0], s) for s in remaining), reverse=True)
-    for _, s in order:
-        value, t = best_free(s)
+    for s in sorted(weighted, key=lambda s: (row_max[s], -s), reverse=True):
+        value, t = place(s)
         assignment[s] = (t, value)
+        used_t.add(t)
+
+    for s in empties:
+        free = [t for t in range(n_tgt) if t not in used_t]
+        t = free[-1] if free else int(np.argmax(sim[s]))
+        assignment[s] = (t, 0.0)
         used_t.add(t)
     return assignment
 

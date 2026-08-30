@@ -102,7 +102,7 @@ class WEIGHTMATCH_OT_auto_match(bpy.types.Operator):
             if sim is None:  # NAME mode: no similarity signal, fill arbitrarily
                 sim = np.zeros((len(src_names), len(tgt_names)), dtype=np.float32)
             before = len(assignment)
-            complete_assignment(sim, assignment, locked_tgt)
+            complete_assignment(sim, assignment, locked_tgt, s.allow_merge)
             force_filled = len(assignment) - before
 
         s.items.clear()

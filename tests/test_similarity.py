@@ -100,6 +100,14 @@ check(full[3][0] == 2, "duplicate D takes the still-free Z before empties")
 check(all(t in (0, 1, 2) for _, (t, _) in full.items()), "targets stay in range")
 check(all(v >= 0.0 for _, (_, v) in full.items()), "recorded similarities sane")
 
+full_m = complete_assignment(sim2, dict(partial), allow_merge=True)
+check(len(full_m) == 6, "merge mode: every source column assigned")
+check(full_m[3][0] == 0 and full_m[3][1] > 0.85,
+      "merge mode: duplicate D merges into its best target X even though Z is free")
+check(full_m[2] == (2, 0.0), "merge mode: empty C spreads onto the free Z")
+check(full_m[4][0] == 0 and full_m[5][0] == 0,
+      "merge mode: leftover empties share a target harmlessly")
+
 print("subsample_indices")
 sub = subsample_indices(list(range(100)), 10)
 check(len(sub) == 10, "thinned to limit")
