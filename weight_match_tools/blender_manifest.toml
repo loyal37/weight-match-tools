@@ -1,0 +1,19 @@
+schema_version = "1.0.0"
+
+id = "weight_match_tools"
+version = "1.0.0"
+name = "Weight Match Tools"
+tagline = "Match vertex groups by position and transfer weights"
+maintainer = "loyal37"
+type = "add-on"
+
+blender_version_min = "4.2.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+tags = [
+  "Rigging",
+  "Pipeline",
+]
