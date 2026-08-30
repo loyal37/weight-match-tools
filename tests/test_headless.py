@@ -119,6 +119,9 @@ bpy.ops.weight_match.apply_rename()
 names = {vg.name for vg in src.vertex_groups}
 check(names == {"head", "body", "foot", "tail"},
       f"apply_rename: source groups now {sorted(names)}")
+check([vg.name for vg in src.vertex_groups] ==
+      [vg.name for vg in tgt.vertex_groups],
+      "apply_rename: source group ORDER matches the target")
 
 # The same mapping still transfers after Apply (falls back to target names).
 bpy.ops.weight_match.transfer_weights()
@@ -251,6 +254,9 @@ bpy.ops.weight_match.apply_rename()
 names = {vg.name for vg in fsrc.vertex_groups}
 check(names == {"x", "y", "z"},
       f"force+apply: source groups == target's set (got {sorted(names)})")
+check([vg.name for vg in fsrc.vertex_groups] == ["x", "y", "z"],
+      f"force+apply: group order matches target (got "
+      f"{[vg.name for vg in fsrc.vertex_groups]})")
 xvg = fsrc.vertex_groups["x"]
 x_count = sum(1 for v in fsrc.data.vertices
               for g in v.groups if g.group == xvg.index)

@@ -60,6 +60,7 @@ class WEIGHTMATCH_PT_main(bpy.types.Panel):
 
         col = box.column(align=True)
         col.prop(s, "create_missing")
+        col.prop(s, "reorder_to_target")
         col.operator("weight_match.apply_rename", icon='CHECKMARK')
         col.prop(s, "normalize_after")
         col.operator("weight_match.transfer_weights", icon='MOD_VERTEX_WEIGHT')

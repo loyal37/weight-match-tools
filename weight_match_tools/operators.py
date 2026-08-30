@@ -36,6 +36,40 @@ def _target_vertex_ids(obj, selected_only):
     return list(range(len(mesh.vertices)))
 
 
+def _reorder_vertex_groups(obj, ordered_names):
+    """Rebuild the object's vertex groups in the given name order.
+
+    Groups absent from ``ordered_names`` keep their relative order at the
+    end.  Weights are re-assigned by name, so armature bindings (which
+    reference names, not indices) are unaffected.  Returns True if the
+    order changed.
+    """
+    current = [vg.name for vg in obj.vertex_groups]
+    wanted = set(ordered_names)
+    new_order = ([n for n in ordered_names if n in current]
+                 + [n for n in current if n not in wanted])
+    if new_order == current:
+        return False
+
+    me = obj.data
+    name_of_index = {vg.index: vg.name for vg in obj.vertex_groups}
+    weights = {name: [] for name in current}
+    for v in me.vertices:
+        vi = v.index
+        for g in v.groups:
+            name = name_of_index.get(g.group)
+            if name is not None:
+                weights[name].append((vi, g.weight))
+
+    for vg in list(obj.vertex_groups):
+        obj.vertex_groups.remove(vg)
+    for name in new_order:
+        vg = obj.vertex_groups.new(name=name)
+        for vi, w in weights[name]:
+            vg.add([vi], w, 'REPLACE')
+    return True
+
+
 class WEIGHTMATCH_OT_auto_match(bpy.types.Operator):
     bl_idname = "weight_match.auto_match"
     bl_label = "Auto Match Groups"
@@ -190,10 +224,16 @@ class WEIGHTMATCH_OT_apply_rename(bpy.types.Operator):
                     src.vertex_groups.new(name=tgt_vg.name)
                     created += 1
 
-        self.report(
-            {'INFO'},
-            f"Renamed {renamed}, merged {merged}, kept {kept} groups; "
-            f"created {created} empty groups")
+        reordered = False
+        if s.reorder_to_target and s.target_object is not None:
+            reordered = _reorder_vertex_groups(
+                src, [vg.name for vg in s.target_object.vertex_groups])
+
+        msg = (f"Renamed {renamed}, merged {merged}, kept {kept} groups; "
+               f"created {created} empty groups")
+        if reordered:
+            msg += "; reordered to target order"
+        self.report({'INFO'}, msg)
         return {'FINISHED'}
 
 

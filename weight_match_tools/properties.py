@@ -151,6 +151,13 @@ class WeightMatchSettings(bpy.types.PropertyGroup):
                     "for target groups that received no weights",
         default=True,
     )
+    reorder_to_target: BoolProperty(
+        name="Match Target Order",
+        description="After Apply: rebuild the source's vertex group list in "
+                    "the same order as the target object (weights follow by "
+                    "name, bindings are unaffected)",
+        default=True,
+    )
     normalize_after: BoolProperty(
         name="Normalize",
         description="After Transfer: rescale each affected vertex's total "
