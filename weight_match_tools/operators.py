@@ -268,6 +268,23 @@ class WEIGHTMATCH_OT_transfer_weights(bpy.types.Operator):
         vert_ids = _target_vertex_ids(tgt, s.use_selected_only)
         field = matching.sample_source_field(src, tgt, vert_ids, src_names)
 
+        # Many-to-one mappings: several source columns can feed the same
+        # target group.  Combine them per vertex (clamped to 1) so nothing
+        # is lost - a plain per-row REPLACE would let the last row win.
+        combined = {}
+        for src_name, tgt_name in pairs:
+            col = col_of_src.get(src_name)
+            if col is None and tgt_name:
+                # After "Apply to Source" the groups already carry the target
+                # names, so the same mapping keeps working via the new name.
+                col = col_of_src.get(tgt_name)
+            if col is None:
+                continue
+            if tgt_name in combined:
+                combined[tgt_name] += field[:, col]
+            else:
+                combined[tgt_name] = field[:, col].copy()
+
         # Existing membership per group index, so stale weights can be
         # overwritten with explicit zeros.
         members = {}
@@ -277,24 +294,16 @@ class WEIGHTMATCH_OT_transfer_weights(bpy.types.Operator):
 
         written_groups = 0
         affected = set()
-        for src_name, tgt_name in pairs:
-            col = col_of_src.get(src_name)
-            if col is None and tgt_name:
-                # After "Apply to Source" the groups already carry the target
-                # names, so the same mapping keeps working via the new name.
-                col = col_of_src.get(tgt_name)
-            if col is None:
-                continue
-            column = field[:, col]
+        for tgt_name, column in combined.items():
             vg = tgt.vertex_groups.get(tgt_name)
             if vg is None:
                 vg = tgt.vertex_groups.new(name=tgt_name)
             mem = members.get(vg.index, ())
             count = 0
             for row, vi in enumerate(vert_ids):
-                w = float(column[row])
+                w = min(1.0, float(column[row]))
                 if w > 1e-6 or vi in mem:
-                    vg.add([vi], min(1.0, w), 'REPLACE')
+                    vg.add([vi], w, 'REPLACE')
                     count += 1
             if count:
                 written_groups += 1

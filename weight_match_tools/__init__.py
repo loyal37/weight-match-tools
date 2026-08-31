@@ -16,12 +16,13 @@ if "bpy" in locals():
     importlib.reload(properties)
     importlib.reload(operators)
     importlib.reload(ui)
+    importlib.reload(translations)
 else:
-    from . import similarity, matching, properties, operators, ui
+    from . import similarity, matching, properties, operators, ui, translations
 
 import bpy
 
-modules = (properties, operators, ui)
+modules = (properties, operators, ui, translations)
 
 
 def register():

@@ -293,6 +293,36 @@ check(mapping.get("e1") in ("mid", "foot") and mapping.get("e2") in ("mid", "foo
       f"empties spread over the free targets (got {mapping})")
 s.similarity_threshold = 0.6
 
+print("=== Scenario G: many-to-one transfer sums weights ===")
+clear_scene()
+msrc = new_sphere("src_m21", (0.0, 0.0, 0.0), 24)
+paint(msrc, "a", lambda co: clamp(co.z))
+paint(msrc, "b", lambda co: 0.5 * clamp(co.z))   # same region, half intensity
+mtgt = new_sphere("tgt_m21", (4.0, 0.0, 0.0), 24)
+paint(mtgt, "top", lambda co: clamp(co.z))
+
+s = bpy.context.scene.weight_match
+s.source_object = msrc
+s.target_object = mtgt
+s.match_mode = 'WEIGHT'
+s.similarity_threshold = 0.6
+s.allow_merge = True
+bpy.ops.weight_match.auto_match()
+mapping = {k: v[0] for k, v in mapping_of(s).items()}
+check(mapping.get("a") == "top" and mapping.get("b") == "top",
+      f"many-to-one: both sources map to 'top' (got {mapping})")
+
+bpy.ops.weight_match.transfer_weights()
+top_vg = mtgt.vertex_groups["top"]
+half = min(mtgt.data.vertices, key=lambda v: abs(v.co.z - 0.5))
+got = 0.0
+for g in half.groups:
+    if g.group == top_vg.index:
+        got = g.weight
+expected = 0.5 + 0.25  # a + b at z=0.5
+check(abs(got - expected) < 0.05,
+      f"many-to-one transfer sums weights at z=0.5: {got:.3f} ~ {expected}")
+
 print()
 result_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "last_headless_result.txt")

@@ -52,8 +52,9 @@ class WEIGHTMATCH_PT_main(bpy.types.Panel):
 
         box = layout.box()
         matched = sum(1 for it in s.items if it.target_name)
-        box.label(text=f"Mapping ({matched}/{len(s.items)} matched)",
-                  icon='GROUP_VERTEX')
+        head = box.row(align=True)
+        head.label(text="Mapping", icon='GROUP_VERTEX')
+        head.label(text=f"({matched}/{len(s.items)})")
         box.template_list("WEIGHTMATCH_UL_mapping", "", s, "items",
                           s, "active_index",
                           rows=6 if s.items else 1)

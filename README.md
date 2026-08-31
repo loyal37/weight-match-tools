@@ -81,6 +81,7 @@ bpy.ops.weight_match.apply_rename()     # 或 transfer_weights()
 ```bash
 # 纯算法单元测试（系统 Python，需 numpy）
 python tests/test_similarity.py
+python tests/check_translations.py
 
 # Blender 无头集成测试
 "D:\blender4,5\blender.exe" --background --factory-startup --python tests/test_headless.py
