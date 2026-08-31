@@ -8,6 +8,7 @@ import numpy as np
 from bpy.props import StringProperty
 
 from . import matching
+from .i18n import tr
 from .similarity import (complete_assignment, cosine_similarity_matrix,
                          greedy_assignment, subsample_indices)
 
@@ -72,9 +73,9 @@ def _reorder_vertex_groups(obj, ordered_names):
 
 class WEIGHTMATCH_OT_auto_match(bpy.types.Operator):
     bl_idname = "weight_match.auto_match"
-    bl_label = "Auto Match Groups"
-    bl_description = "Guess which source vertex group corresponds to which " \
-                     "target vertex group and fill the mapping table"
+    bl_label = tr("Auto Match Groups")
+    bl_description = tr("Guess which source vertex group corresponds to which "
+                        "target vertex group and fill the mapping table")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -160,10 +161,10 @@ class WEIGHTMATCH_OT_auto_match(bpy.types.Operator):
 
 class WEIGHTMATCH_OT_apply_rename(bpy.types.Operator):
     bl_idname = "weight_match.apply_rename"
-    bl_label = "Apply to Source (Rename/Merge)"
-    bl_description = "Rename the source object's vertex groups to the matched " \
-                     "target names, merging weights where names collide, and " \
-                     "create empty groups for missing target groups"
+    bl_label = tr("Apply to Source (Rename/Merge)")
+    bl_description = tr("Rename the source object's vertex groups to the matched "
+                        "target names, merging weights where names collide, and "
+                        "create empty groups for missing target groups")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -239,10 +240,10 @@ class WEIGHTMATCH_OT_apply_rename(bpy.types.Operator):
 
 class WEIGHTMATCH_OT_transfer_weights(bpy.types.Operator):
     bl_idname = "weight_match.transfer_weights"
-    bl_label = "Transfer Weights to Target"
-    bl_description = "Write the source groups' weights onto the target mesh " \
-                     "using the mapping table (surface sampling, so it works " \
-                     "across different topology)"
+    bl_label = tr("Transfer Weights to Target")
+    bl_description = tr("Write the source groups' weights onto the target mesh "
+                        "using the mapping table (surface sampling, so it works "
+                        "across different topology)")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -333,12 +334,12 @@ class WEIGHTMATCH_OT_transfer_weights(bpy.types.Operator):
 
 class WEIGHTMATCH_OT_export_csv(bpy.types.Operator):
     bl_idname = "weight_match.export_csv"
-    bl_label = "Export Mapping (CSV)"
-    bl_description = "Save the current mapping table as a CSV file"
+    bl_label = tr("Export Mapping (CSV)")
+    bl_description = tr("Save the current mapping table as a CSV file")
 
     filepath: StringProperty(
-        name="File Path",
-        description="Where to save the CSV",
+        name=tr("File Path"),
+        description=tr("Where to save the CSV"),
         default="weight_mapping.csv",
         subtype='FILE_PATH',
     )
@@ -365,8 +366,8 @@ class WEIGHTMATCH_OT_export_csv(bpy.types.Operator):
 
 class WEIGHTMATCH_OT_clear_mapping(bpy.types.Operator):
     bl_idname = "weight_match.clear_mapping"
-    bl_label = "Clear Mapping"
-    bl_description = "Empty the mapping table"
+    bl_label = tr("Clear Mapping")
+    bl_description = tr("Empty the mapping table")
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):

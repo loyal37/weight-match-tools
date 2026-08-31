@@ -16,13 +16,16 @@ if "bpy" in locals():
     importlib.reload(properties)
     importlib.reload(operators)
     importlib.reload(ui)
-    importlib.reload(translations)
 else:
-    from . import similarity, matching, properties, operators, ui, translations
+    from . import similarity, matching, properties, operators, ui
+
+# i18n is imported but never reloaded: it owns the language choice and its
+# registered WindowManager property must survive script reloads.
+from . import i18n
 
 import bpy
 
-modules = (properties, operators, ui, translations)
+modules = (i18n, properties, operators, ui)
 
 
 def register():

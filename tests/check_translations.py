@@ -1,8 +1,4 @@
-"""Check that every UI string in the code has a zh_CN translation entry.
-
-Only inspects the translatable slots: name=/description= keyword arguments
-and bl_label/bl_description/bl_category assignments (including implicit
-string concatenation).
+"""Check that every tr() call in the UI code has a zh_CN entry (and no orphans).
 
 Run:  py tests/check_translations.py
 """
@@ -12,12 +8,21 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "weight_match_tools"))
 
-from translations import TRANSLATIONS  # noqa: E402
+# i18n imports bpy (unavailable here), so parse the ZH dict out with ast -
+# implicit string concatenation is merged at parse time, so literal_eval works.
+with open(os.path.join(ROOT, "weight_match_tools", "i18n.py"),
+          encoding="utf-8") as f:
+    tree = ast.parse(f.read())
+ZH = None
+for node in tree.body:
+    if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) \
+            and node.targets[0].id == "ZH":
+        ZH = ast.literal_eval(node.value)
+if ZH is None:
+    sys.exit("FAIL - ZH dict not found in i18n.py")
 
 CODE_FILES = ["properties.py", "operators.py", "ui.py"]
-UI_KWARGS = {"name", "description"}
 
 
 def const_text(node):
@@ -31,47 +36,34 @@ def const_text(node):
     return None
 
 
-def ui_strings(tree, tuple_items):
+def tr_args(tree):
+    """Collect the string arguments of tr(...) calls."""
     for node in ast.walk(tree):
-        # keyword args: name="...", description="...", text="..."
-        if isinstance(node, ast.keyword) and node.arg in UI_KWARGS | {"text"}:
-            text = const_text(node.value)
-            if text is not None and len(text) >= 3:
-                yield text
-        # assignments: bl_label = "..." / bl_description = "..." / bl_category = "..."
-        if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name) \
-                and node.targets[0].id in {"bl_label", "bl_description", "bl_category"}:
-            text = const_text(node.value)
-            if text is not None:
-                yield text
-        # enum item tuples: (identifier, name, description) — properties.py only
-        if tuple_items and isinstance(node, (ast.Tuple, ast.List)):
-            for elt in node.elts:
-                text = const_text(elt)
-                if text is not None and len(text) >= 3 and text.isascii() \
-                        and not text.isupper():  # skip enum identifiers
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id == "tr":
+            for arg in node.args:
+                text = const_text(arg)
+                if text is not None and len(text) >= 3 and text.isascii():
                     yield text
 
 
+used = set()
 failures = []
-keys = TRANSLATIONS["*"]
-code_strings = set()
-
 for fname in CODE_FILES:
     path = os.path.join(ROOT, "weight_match_tools", fname)
     with open(path, encoding="utf-8") as f:
         tree = ast.parse(f.read())
-    for text in ui_strings(tree, tuple_items=(fname == "properties.py")):
-        code_strings.add(text)
-        if text not in keys:
-            failures.append(f"{fname}: missing translation for {text!r}")
+    for text in tr_args(tree):
+        used.add(text)
+        if text not in ZH:
+            failures.append(f"{fname}: no zh entry for {text!r}")
 
-for key in keys:
-    if key not in code_strings:
-        failures.append(f"dict key not found in any UI slot: {key!r}")
+for key in ZH:
+    if key not in used:
+        failures.append(f"zh entry never used in code: {key!r}")
 
 if failures:
     for f in failures:
         print("FAIL -", f)
     sys.exit(1)
-print(f"ALL {len(keys)} TRANSLATION KEYS MATCH THE UI STRINGS")
+print(f"ALL {len(ZH)} zh ENTRIES MATCH tr() CALLS ({len(used)} strings)")

@@ -2,6 +2,8 @@
 
 import bpy
 
+from .i18n import tr
+
 
 class WEIGHTMATCH_UL_mapping(bpy.types.UIList):
     """The source -> target mapping table."""
@@ -21,21 +23,25 @@ class WEIGHTMATCH_UL_mapping(bpy.types.UIList):
 
 
 class WEIGHTMATCH_PT_main(bpy.types.Panel):
-    bl_label = "Weight Match"
+    bl_label = tr("Weight Match")
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "Weight Match"
+    bl_category = tr("Weight Match")
 
     def draw(self, context):
         s = context.scene.weight_match
         layout = self.layout
+
+        row = layout.row(align=True)
+        row.label(text="Language / 语言")
+        row.prop(context.window_manager.wmt_lang, "language", text="")
 
         col = layout.column(align=True)
         col.prop(s, "source_object")
         col.prop(s, "target_object")
 
         box = layout.box()
-        box.label(text="Matching", icon='MOD_DATA_TRANSFER')
+        box.label(text=tr("Matching"), icon='MOD_DATA_TRANSFER')
         col = box.column(align=True)
         col.prop(s, "match_mode", text="")
         if s.match_mode != 'NAME':
@@ -53,7 +59,7 @@ class WEIGHTMATCH_PT_main(bpy.types.Panel):
         box = layout.box()
         matched = sum(1 for it in s.items if it.target_name)
         head = box.row(align=True)
-        head.label(text="Mapping", icon='GROUP_VERTEX')
+        head.label(text=tr("Mapping"), icon='GROUP_VERTEX')
         head.label(text=f"({matched}/{len(s.items)})")
         box.template_list("WEIGHTMATCH_UL_mapping", "", s, "items",
                           s, "active_index",

@@ -323,6 +323,43 @@ expected = 0.5 + 0.25  # a + b at z=0.5
 check(abs(got - expected) < 0.05,
       f"many-to-one transfer sums weights at z=0.5: {got:.3f} ~ {expected}")
 
+print("=== Scenario H: add-on language switch ===")
+from weight_match_tools import i18n
+
+s = bpy.context.scene.weight_match
+lang_src = new_sphere("src_lang", (0.0, 0.0, 0.0), 8)
+s.source_object = lang_src  # keep some state across the switch
+s.items.clear()
+row = s.items.add()
+row.source_name = "p"
+row.target_name = "top"
+row.similarity = 0.9
+
+
+def source_object_label():
+    rna = bpy.types.Scene.bl_rna.properties["weight_match"]
+    return rna.fixed_type.bl_rna.properties["source_object"].name
+
+
+check(source_object_label() == "源物体",
+      f"default language is Chinese (got {source_object_label()!r})")
+check(bpy.context.window_manager.wmt_lang.language == 'zh_CN',
+      "language property defaults to zh_CN")
+
+i18n.apply_language('en_US')
+check(source_object_label() == "Source",
+      f"switch to English (got {source_object_label()!r})")
+s2 = bpy.context.scene.weight_match
+check(s2.source_object.name == "src_lang" and len(s2.items) == 1
+      and s2.items[0].target_name == "top",
+      "settings and mapping rows survive the language switch")
+
+i18n.apply_language('zh_CN')
+check(source_object_label() == "源物体", "switch back to Chinese")
+s3 = bpy.context.scene.weight_match
+check(len(s3.items) == 1 and s3.items[0].source_name == "p",
+      "mapping rows survive switching back")
+
 print()
 result_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "last_headless_result.txt")
