@@ -55,6 +55,7 @@ class WEIGHTMATCH_PT_main(bpy.types.Panel):
         col.prop(s, "force_match_all")
         col.prop(s, "use_selected_only")
         col.operator("weight_match.auto_match", icon='SNAP_ON')
+        col.operator("weight_match.batch_match", icon='GROUP_VERTEX')
 
         box = layout.box()
         matched = sum(1 for it in s.items if it.target_name)

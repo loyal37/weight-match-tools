@@ -118,6 +118,12 @@ ZH = {
     "Guess which source vertex group corresponds to which "
     "target vertex group and fill the mapping table":
         "推断源物体哪个顶点组对应目标物体哪个顶点组，并生成映射表",
+    "Batch Match Selected": "批量匹配选中物体",
+    "Run Auto Match + Apply on every selected mesh (except "
+    "the target) against the target object, using the "
+    "current matching settings":
+        "对除目标物体外的所有选中网格，按当前匹配设置"
+        "依次执行自动匹配+应用（改名/合并/补齐/排序）",
     "Apply to Source (Rename/Merge)": "应用到源（改名/合并）",
     "Rename the source object's vertex groups to the matched "
     "target names, merging weights where names collide, and "

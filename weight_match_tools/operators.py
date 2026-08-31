@@ -71,6 +71,72 @@ def _reorder_vertex_groups(obj, ordered_names):
     return True
 
 
+def _compute_assignment(src, tgt, s):
+    """Match src's groups against tgt's with the given settings.
+
+    Returns (src_names, tgt_names, assignment, force_filled) where assignment
+    maps a source column index to (target column index, similarity) and
+    force_filled counts pairs added by Match All (Force).
+    """
+    src_names = _group_names(src)
+    tgt_names = _group_names(tgt)
+    assignment = {}
+    locked_src, locked_tgt = set(), set()
+    sim = None
+    if s.match_mode != 'NAME' and s.prefer_same_name:
+        for si, name in enumerate(src_names):
+            if name in tgt_names:
+                ti = tgt_names.index(name)
+                assignment[si] = (ti, 1.0)
+                locked_src.add(si)
+                locked_tgt.add(ti)
+
+    if s.match_mode == 'NAME':
+        assignment.update(matching.match_by_name(src_names, tgt_names))
+    elif s.match_mode == 'CENTROID':
+        src_cents, diag_s = matching.group_centroids(
+            src, src_names, min_weight=s.min_weight)
+        tgt_cents, diag_t = matching.group_centroids(
+            tgt, tgt_names, min_weight=s.min_weight)
+        sim = matching.centroid_similarity_matrix(
+            src_cents, tgt_cents, len(src_names), len(tgt_names),
+            max(diag_s, diag_t))
+        assignment.update(greedy_assignment(
+            sim, s.similarity_threshold, s.allow_merge,
+            locked_src, locked_tgt))
+    else:  # WEIGHT
+        vert_ids = subsample_indices(
+            _target_vertex_ids(tgt, s.use_selected_only), s.sample_limit)
+        src_field = matching.sample_source_field(src, tgt, vert_ids, src_names)
+        tgt_field = matching.weight_matrix(tgt, tgt_names, vert_ids)
+        sim = cosine_similarity_matrix(src_field, tgt_field)
+        assignment.update(greedy_assignment(
+            sim, s.similarity_threshold, s.allow_merge,
+            locked_src, locked_tgt))
+
+    force_filled = 0
+    if s.force_match_all:
+        before = len(assignment)
+        if sim is None:  # NAME mode: no similarity signal, fill arbitrarily
+            sim = np.zeros((len(src_names), len(tgt_names)), dtype=np.float32)
+        complete_assignment(sim, assignment, locked_tgt, s.allow_merge)
+        force_filled = len(assignment) - before
+    return src_names, tgt_names, assignment, force_filled
+
+
+def _write_items(s, src_names, tgt_names, assignment):
+    """Fill the mapping table from an assignment dict."""
+    s.items.clear()
+    for si, name in enumerate(src_names):
+        item = s.items.add()
+        item.source_name = name
+        hit = assignment.get(si)
+        if hit is not None:
+            ti, score = hit
+            item.target_enum = tgt_names[ti]
+            item.similarity = float(score)
+
+
 class WEIGHTMATCH_OT_auto_match(bpy.types.Operator):
     bl_idname = "weight_match.auto_match"
     bl_label = tr("Auto Match Groups")
@@ -89,66 +155,18 @@ class WEIGHTMATCH_OT_auto_match(bpy.types.Operator):
         s = context.scene.weight_match
         src, tgt = s.source_object, s.target_object
         src_names = _group_names(src)
-        tgt_names = _group_names(tgt)
         if not src_names:
             self.report({'WARNING'}, "Source object has no vertex groups")
             return {'CANCELLED'}
-        if not tgt_names:
+        if not _group_names(tgt):
             self.report({'WARNING'}, "Target object has no vertex groups")
             return {'CANCELLED'}
 
         t0 = time.time()
-        assignment = {}
-        locked_src, locked_tgt = set(), set()
-        sim = None
-        if s.match_mode != 'NAME' and s.prefer_same_name:
-            for si, name in enumerate(src_names):
-                if name in tgt_names:
-                    ti = tgt_names.index(name)
-                    assignment[si] = (ti, 1.0)
-                    locked_src.add(si)
-                    locked_tgt.add(ti)
+        src_names, tgt_names, assignment, force_filled = \
+            _compute_assignment(src, tgt, s)
 
-        if s.match_mode == 'NAME':
-            assignment.update(matching.match_by_name(src_names, tgt_names))
-        elif s.match_mode == 'CENTROID':
-            src_cents, diag_s = matching.group_centroids(
-                src, src_names, min_weight=s.min_weight)
-            tgt_cents, diag_t = matching.group_centroids(
-                tgt, tgt_names, min_weight=s.min_weight)
-            sim = matching.centroid_similarity_matrix(
-                src_cents, tgt_cents, len(src_names), len(tgt_names),
-                max(diag_s, diag_t))
-            assignment.update(greedy_assignment(
-                sim, s.similarity_threshold, s.allow_merge,
-                locked_src, locked_tgt))
-        else:  # WEIGHT
-            vert_ids = subsample_indices(
-                _target_vertex_ids(tgt, s.use_selected_only), s.sample_limit)
-            src_field = matching.sample_source_field(src, tgt, vert_ids, src_names)
-            tgt_field = matching.weight_matrix(tgt, tgt_names, vert_ids)
-            sim = cosine_similarity_matrix(src_field, tgt_field)
-            assignment.update(greedy_assignment(
-                sim, s.similarity_threshold, s.allow_merge,
-                locked_src, locked_tgt))
-
-        force_filled = 0
-        if s.force_match_all:
-            if sim is None:  # NAME mode: no similarity signal, fill arbitrarily
-                sim = np.zeros((len(src_names), len(tgt_names)), dtype=np.float32)
-            before = len(assignment)
-            complete_assignment(sim, assignment, locked_tgt, s.allow_merge)
-            force_filled = len(assignment) - before
-
-        s.items.clear()
-        for si, name in enumerate(src_names):
-            item = s.items.add()
-            item.source_name = name
-            hit = assignment.get(si)
-            if hit is not None:
-                ti, score = hit
-                item.target_enum = tgt_names[ti]
-                item.similarity = float(score)
+        _write_items(s, src_names, tgt_names, assignment)
 
         matched = sum(1 for it in s.items if it.target_name)
         msg = (f"Matched {matched}/{len(src_names)} source groups "
@@ -157,6 +175,64 @@ class WEIGHTMATCH_OT_auto_match(bpy.types.Operator):
             msg += f", force-filled {force_filled} without a strong match"
         self.report({'INFO'}, msg)
         return {'FINISHED'}
+
+
+def _apply_mapping(src, tgt_obj, pairs, create_missing, reorder_to_target):
+    """Rename/merge src's groups per (source, target-or-None) pairs.
+
+    Returns (renamed, merged, kept, created, reordered).
+    """
+    me = src.data
+    # Phase 1: move every involved source group out of the way with a temp
+    # name so renames can never collide with names still waiting to be
+    # merged into.
+    used = {vg.name for vg in src.vertex_groups}
+    staged = []  # (temp_name, original_name, target_name_or_None)
+    for i, (src_name, tgt_name) in enumerate(pairs):
+        vg = src.vertex_groups.get(src_name)
+        if vg is None:
+            continue
+        temp = f"__wmt_{i}"
+        while temp in used:
+            temp += "_"
+        vg.name = temp
+        used.add(temp)
+        staged.append((temp, src_name, tgt_name))
+
+    renamed = merged = kept = 0
+    for temp, orig, tgt_name in staged:
+        vg = src.vertex_groups.get(temp)
+        final = tgt_name if tgt_name else orig
+        existing = src.vertex_groups.get(final)
+        if existing is None:
+            vg.name = final
+            if final == orig:
+                kept += 1
+            else:
+                renamed += 1
+        else:
+            # A group with the final name already exists (either another
+            # staged group claimed it first, or it was never staged):
+            # union the weights.
+            for v in me.vertices:
+                for g in v.groups:
+                    if g.group == vg.index:
+                        existing.add([v.index], g.weight, 'ADD')
+            src.vertex_groups.remove(vg)
+            merged += 1
+
+    created = 0
+    if create_missing and tgt_obj is not None:
+        for tgt_vg in tgt_obj.vertex_groups:
+            if src.vertex_groups.get(tgt_vg.name) is None:
+                src.vertex_groups.new(name=tgt_vg.name)
+                created += 1
+
+    reordered = False
+    if reorder_to_target and tgt_obj is not None:
+        reordered = _reorder_vertex_groups(
+            src, [vg.name for vg in tgt_obj.vertex_groups])
+    return renamed, merged, kept, created, reordered
 
 
 class WEIGHTMATCH_OT_apply_rename(bpy.types.Operator):
@@ -173,67 +249,80 @@ class WEIGHTMATCH_OT_apply_rename(bpy.types.Operator):
 
     def execute(self, context):
         s = context.scene.weight_match
-        src = s.source_object
-        me = src.data
         pairs = _active_pairs(s)
         if not pairs:
             self.report({'WARNING'}, "Mapping table is empty - run Auto Match first")
             return {'CANCELLED'}
 
-        # Phase 1: move every involved source group out of the way with a temp
-        # name so renames can never collide with names still waiting to be
-        # merged into.
-        used = {vg.name for vg in src.vertex_groups}
-        staged = []  # (temp_name, original_name, target_name_or_None)
-        for i, (src_name, tgt_name) in enumerate(pairs):
-            vg = src.vertex_groups.get(src_name)
-            if vg is None:
-                continue
-            temp = f"__wmt_{i}"
-            while temp in used:
-                temp += "_"
-            vg.name = temp
-            used.add(temp)
-            staged.append((temp, src_name, tgt_name))
-
-        renamed = merged = kept = 0
-        for temp, orig, tgt_name in staged:
-            vg = src.vertex_groups.get(temp)
-            final = tgt_name if tgt_name else orig
-            existing = src.vertex_groups.get(final)
-            if existing is None:
-                vg.name = final
-                if final == orig:
-                    kept += 1
-                else:
-                    renamed += 1
-            else:
-                # A group with the final name already exists (either another
-                # staged group claimed it first, or it was never staged):
-                # union the weights.
-                for v in me.vertices:
-                    for g in v.groups:
-                        if g.group == vg.index:
-                            existing.add([v.index], g.weight, 'ADD')
-                src.vertex_groups.remove(vg)
-                merged += 1
-
-        created = 0
-        if s.create_missing and s.target_object is not None:
-            for tgt_vg in s.target_object.vertex_groups:
-                if src.vertex_groups.get(tgt_vg.name) is None:
-                    src.vertex_groups.new(name=tgt_vg.name)
-                    created += 1
-
-        reordered = False
-        if s.reorder_to_target and s.target_object is not None:
-            reordered = _reorder_vertex_groups(
-                src, [vg.name for vg in s.target_object.vertex_groups])
+        renamed, merged, kept, created, reordered = _apply_mapping(
+            s.source_object, s.target_object, pairs,
+            s.create_missing, s.reorder_to_target)
 
         msg = (f"Renamed {renamed}, merged {merged}, kept {kept} groups; "
                f"created {created} empty groups")
         if reordered:
             msg += "; reordered to target order"
+        self.report({'INFO'}, msg)
+        return {'FINISHED'}
+
+
+class WEIGHTMATCH_OT_batch_match(bpy.types.Operator):
+    bl_idname = "weight_match.batch_match"
+    bl_label = tr("Batch Match Selected")
+    bl_description = tr("Run Auto Match + Apply on every selected mesh (except "
+                        "the target) against the target object, using the "
+                        "current matching settings")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        s = context.scene.weight_match
+        return s.target_object is not None and bool(context.selected_objects)
+
+    def execute(self, context):
+        s = context.scene.weight_match
+        tgt = s.target_object
+        if not _group_names(tgt):
+            self.report({'WARNING'}, "Target object has no vertex groups")
+            return {'CANCELLED'}
+
+        # view_layer scan instead of context.selected_objects: the latter can
+        # lag behind select_set() until the depsgraph re-evaluates.
+        sources = [o for o in context.view_layer.objects
+                   if o.select_get() and o.type == 'MESH' and o != tgt]
+        if not sources:
+            self.report({'WARNING'},
+                        "Select the mesh objects to match (the target is skipped)")
+            return {'CANCELLED'}
+        sources.sort(key=lambda o: o.name)
+
+        t0 = time.time()
+        lines = []
+        for src in sources:
+            src_names = _group_names(src)
+            if not src_names:
+                lines.append(f"{src.name}: skipped (no vertex groups)")
+                continue
+            _, tgt_names, assignment, _ = _compute_assignment(src, tgt, s)
+            pairs = [(name, tgt_names[assignment[si][0]] if si in assignment
+                      else None)
+                     for si, name in enumerate(src_names)]
+            renamed, merged, kept, created, reordered = _apply_mapping(
+                src, tgt, pairs, s.create_missing, s.reorder_to_target)
+            lines.append(f"{src.name}: renamed {renamed}, merged {merged}, "
+                         f"created {created}")
+
+        # leave the table showing the last source's mapping for inspection
+        if sources:
+            last = sources[-1]
+            if _group_names(last):
+                _, _, assignment, _ = _compute_assignment(last, tgt, s)
+                _write_items(s, _group_names(last), _group_names(tgt), assignment)
+                s.source_object = last
+
+        msg = (f"Batch matched {len(sources)} objects in "
+               f"{time.time() - t0:.1f}s\n" + "\n".join(lines))
+        print(msg)
         self.report({'INFO'}, msg)
         return {'FINISHED'}
 
@@ -377,6 +466,7 @@ class WEIGHTMATCH_OT_clear_mapping(bpy.types.Operator):
 
 classes = (
     WEIGHTMATCH_OT_auto_match,
+    WEIGHTMATCH_OT_batch_match,
     WEIGHTMATCH_OT_apply_rename,
     WEIGHTMATCH_OT_transfer_weights,
     WEIGHTMATCH_OT_export_csv,

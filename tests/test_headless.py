@@ -360,6 +360,61 @@ s3 = bpy.context.scene.weight_match
 check(len(s3.items) == 1 and s3.items[0].source_name == "p",
       "mapping rows survive switching back")
 
+print("=== Scenario I: batch match many sources -> one target ===")
+clear_scene()
+
+
+def new_cube(name, location):
+    bpy.ops.mesh.primitive_cube_add(size=2, location=location)
+    obj = bpy.context.active_object
+    obj.name = name
+    return obj
+
+
+def paint_box(obj, name, axis, sign):
+    vg = obj.vertex_groups.new(name=name)
+    for v in obj.data.vertices:
+        if sign * getattr(v.co, axis) > 0.0:
+            vg.add([v.index], 1.0, 'REPLACE')
+
+
+tobj = new_cube("tgt_bat", (10.0, 0.0, 0.0))
+paint_box(tobj, "x", "x", -1)
+paint_box(tobj, "y", "z", 1)
+
+b1 = new_cube("bat_1", (0.0, 0.0, 0.0))
+paint_box(b1, "a", "x", -1)
+paint_box(b1, "b", "z", 1)
+a_count = sum(1 for v in b1.data.vertices
+              for g in v.groups if g.group == b1.vertex_groups["a"].index)
+
+b2 = new_cube("bat_2", (5.0, 0.0, 0.0))
+paint_box(b2, "c", "x", -1)
+paint_box(b2, "d", "z", 1)
+b2.vertex_groups.new(name="e")  # empty -> force-filled
+
+s = bpy.context.scene.weight_match
+s.target_object = tobj
+s.match_mode = 'WEIGHT'
+s.similarity_threshold = 0.6
+s.force_match_all = True
+s.allow_merge = True
+
+b1.select_set(True)
+b2.select_set(True)
+tobj.select_set(True)  # must be skipped even though selected
+bpy.ops.weight_match.batch_match()
+
+for obj in (b1, b2):
+    names = [vg.name for vg in obj.vertex_groups]
+    check(names == ["x", "y"], f"batch: {obj.name} groups == target order (got {names})")
+xvg = b1.vertex_groups["x"]
+x_count = sum(1 for v in b1.data.vertices
+              for g in v.groups if g.group == xvg.index)
+check(x_count == a_count, f"batch: b1 'x' kept 'a' weights ({x_count} == {a_count})")
+check(s.source_object.name == "bat_2",
+      "batch: mapping table left on the last processed source")
+
 print()
 result_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "last_headless_result.txt")
