@@ -11,29 +11,56 @@ from bpy.props import (
     StringProperty,
 )
 
-from .i18n import tr
+from .i18n import register_rna_class, tr, unregister_rna_class
 
 # Sentinel target value meaning "leave the source group's name unchanged".
 KEEP = "__KEEP__"
+
+# Blender keeps pointers to strings returned by dynamic EnumProperty callbacks.
+# Those strings therefore need to outlive the temporary list returned by the
+# callback; otherwise entries (especially non-ASCII names) can turn into
+# garbage and a later assignment is rejected as "enum value not found".
+_ENUM_STRINGS = {KEEP: KEEP}
+_TARGET_GROUP_ITEMS = []
+_TARGET_GROUP_KEY = None
 
 
 def _poll_mesh_object(self, obj):
     return obj.type == 'MESH'
 
 
+def _stable_enum_string(value):
+    value = str(value)
+    return _ENUM_STRINGS.setdefault(value, value)
+
+
 def _target_group_items(self, context):
     """Dynamic enum listing the target object's vertex groups."""
-    items = [(KEEP, tr("(keep name)"),
-              tr("Leave this source group's name unchanged"))]
+    global _TARGET_GROUP_ITEMS, _TARGET_GROUP_KEY
+
+    target = None
     try:
         settings = context.scene.weight_match
         target = settings.target_object
-        if target is not None:
-            for vg in target.vertex_groups:
-                items.append((vg.name, vg.name, ""))
     except Exception:
         pass
-    return items
+
+    names = tuple(vg.name for vg in target.vertex_groups) if target else ()
+    target_id = target.as_pointer() if target else 0
+    key = (target_id, names, tr("(keep name)"),
+           tr("Leave this source group's name unchanged"))
+    if key != _TARGET_GROUP_KEY:
+        items = [(
+            KEEP,
+            _stable_enum_string(key[2]),
+            _stable_enum_string(key[3]),
+        )]
+        for name in names:
+            stable = _stable_enum_string(name)
+            items.append((stable, stable, ""))
+        _TARGET_GROUP_ITEMS = items
+        _TARGET_GROUP_KEY = key
+    return _TARGET_GROUP_ITEMS
 
 
 def _update_target_enum(self, context):
@@ -44,6 +71,12 @@ class WeightMatchItem(bpy.types.PropertyGroup):
     """One row of the source -> target mapping table."""
 
     source_name: StringProperty(name=tr("Source Group"))
+    source_side: StringProperty(
+        name=tr("Source Side"),
+        description=tr("Internal spatial half used when a bilateral source "
+                       "group is split automatically"),
+        default="",
+    )
     target_name: StringProperty(name=tr("Target Group"))
     target_enum: EnumProperty(
         name=tr("Target Group"),
@@ -86,8 +119,8 @@ class WeightMatchSettings(bpy.types.PropertyGroup):
         name=tr("Match Mode"),
         items=(
             ('WEIGHT', tr("Weight Field"),
-             tr("Sample each source group's weights onto the target surface "
-                "and compare against the target groups' weight fields "
+             tr("Sample the target weight fields onto the source surface "
+                "and compare them with each weighted source group "
                 "(most accurate, recommended)")),
             ('CENTROID', tr("Spatial Centroid"),
              tr("Match each group's weighted average position "
@@ -106,12 +139,6 @@ class WeightMatchSettings(bpy.types.PropertyGroup):
         max=1.0,
         subtype='FACTOR',
     )
-    prefer_same_name: BoolProperty(
-        name=tr("Lock Same Names"),
-        description=tr("Groups whose names are identical on both sides are "
-                       "matched first and excluded from automatic assignment"),
-        default=True,
-    )
     allow_merge: BoolProperty(
         name=tr("Allow Many-to-One"),
         description=tr("Let several source groups match the same target group "
@@ -120,11 +147,10 @@ class WeightMatchSettings(bpy.types.PropertyGroup):
     )
     force_match_all: BoolProperty(
         name=tr("Match All (Force)"),
-        description=tr("Give every unmatched source group a target too: good "
+        description=tr("Give every unmatched weighted source group a target: good "
                        "matches keep their 1:1 pairs, the rest take the closest "
-                       "remaining target (empty groups go last).  Use this when "
-                       "the source must end up with exactly the target's group "
-                       "names, e.g. numeric bone ids 0..N"),
+                       "remaining weighted deform group. Empty groups do not "
+                       "participate; Apply rebuilds them from the target"),
         default=False,
     )
     use_selected_only: BoolProperty(
@@ -142,24 +168,11 @@ class WeightMatchSettings(bpy.types.PropertyGroup):
     )
     sample_limit: IntProperty(
         name=tr("Sample Limit"),
-        description=tr("Maximum number of target vertices used for matching "
+        description=tr("Maximum number of surface vertices used for matching "
                        "(Transfer always uses every affected vertex)"),
         default=20000,
         min=100,
         soft_max=200000,
-    )
-    create_missing: BoolProperty(
-        name=tr("Fill Missing Groups"),
-        description=tr("After Apply: create empty vertex groups on the source "
-                       "for target groups that received no weights"),
-        default=True,
-    )
-    reorder_to_target: BoolProperty(
-        name=tr("Match Target Order"),
-        description=tr("After Apply: rebuild the source's vertex group list in "
-                       "the same order as the target object (weights follow by "
-                       "name, bindings are unaffected)"),
-        default=True,
     )
     normalize_after: BoolProperty(
         name=tr("Normalize"),
@@ -177,11 +190,14 @@ classes = (WeightMatchItem, WeightMatchSettings)
 
 def register():
     for cls in classes:
-        bpy.utils.register_class(cls)
+        register_rna_class(cls)
+    if hasattr(bpy.types.Scene, "weight_match"):
+        del bpy.types.Scene.weight_match
     bpy.types.Scene.weight_match = PointerProperty(type=WeightMatchSettings)
 
 
 def unregister():
-    del bpy.types.Scene.weight_match
+    if hasattr(bpy.types.Scene, "weight_match"):
+        del bpy.types.Scene.weight_match
     for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+        unregister_rna_class(cls)

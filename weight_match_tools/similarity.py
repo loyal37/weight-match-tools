@@ -22,35 +22,139 @@ def cosine_similarity_matrix(source_field, target_field):
     """
 
     def _norm_cols(m):
-        norms = np.linalg.norm(m, axis=0, keepdims=True)
-        return m / (norms + 1e-9)
+        # Keep the working copies at float32.  At the default 20k samples this
+        # halves the peak normalization memory compared with float64, while a
+        # float64 reduction keeps column norms accurate.
+        out = np.array(m, dtype=np.float32, copy=True)
+        norms = np.sqrt(np.sum(out * out, axis=0, dtype=np.float64))
+        np.divide(out, norms[None, :] + 1e-9, out=out)
+        return out
 
-    s = _norm_cols(np.asarray(source_field, dtype=np.float64))
-    t = _norm_cols(np.asarray(target_field, dtype=np.float64))
-    return (s.T @ t).astype(np.float32)
+    s = _norm_cols(source_field)
+    t = _norm_cols(target_field)
+    result = (s.T @ t).astype(np.float32)
+    np.clip(result, 0.0, 1.0, out=result)
+    result[np.isclose(result, 0.0, atol=1e-7)] = 0.0
+    result[np.isclose(result, 1.0, atol=1e-6)] = 1.0
+    return result
 
 
-def greedy_assignment(similarity, threshold, allow_merge=False,
-                      locked_src=(), locked_tgt=()):
+def _minimum_cost_assignment(cost):
+    """Rectangular Hungarian assignment for a matrix with rows <= columns."""
+    cost = np.asarray(cost, dtype=np.float64)
+    n_rows, n_cols = cost.shape
+    if n_rows > n_cols:
+        raise ValueError("assignment requires rows <= columns")
+
+    # Potentials and predecessor arrays use the standard one-based Hungarian
+    # representation; NumPy handles the per-column relaxation in bulk.
+    u = np.zeros(n_rows + 1, dtype=np.float64)
+    v = np.zeros(n_cols + 1, dtype=np.float64)
+    p = np.zeros(n_cols + 1, dtype=np.int32)
+    way = np.zeros(n_cols + 1, dtype=np.int32)
+
+    for row in range(1, n_rows + 1):
+        p[0] = row
+        minv = np.full(n_cols + 1, np.inf, dtype=np.float64)
+        used = np.zeros(n_cols + 1, dtype=bool)
+        col0 = 0
+        while True:
+            used[col0] = True
+            row0 = p[col0]
+            cur = cost[row0 - 1] - u[row0] - v[1:]
+            free_mask = ~used[1:]
+            better = free_mask & (cur < minv[1:])
+            minv_view = minv[1:]
+            way_view = way[1:]
+            minv_view[better] = cur[better]
+            way_view[better] = col0
+
+            free_cols = np.flatnonzero(free_mask) + 1
+            col1 = int(free_cols[np.argmin(minv[free_cols])])
+            delta = minv[col1]
+            used_cols = np.flatnonzero(used)
+            u[p[used_cols]] += delta
+            v[used_cols] -= delta
+            minv[~used] -= delta
+            col0 = col1
+            if p[col0] == 0:
+                break
+
+        while True:
+            col1 = way[col0]
+            p[col0] = p[col1]
+            col0 = col1
+            if col0 == 0:
+                break
+
+    assignment = np.full(n_rows, -1, dtype=np.int32)
+    for col in range(1, n_cols + 1):
+        if p[col]:
+            assignment[p[col] - 1] = col - 1
+    return assignment
+
+
+def optimal_assignment(similarity, threshold, allow_merge=False):
+    """Assign source columns to targets using the best valid global mapping.
+
+    One-to-one mode maximizes total confidence while allowing a source to stay
+    unmatched.  This avoids both the classic greedy failure and the opposite
+    failure of sacrificing one near-certain pair merely to keep several
+    threshold-level pairs.  Many-to-one mode is independent per source and
+    therefore simply takes each source's best target.
+    """
+    sim = np.asarray(similarity, dtype=np.float32)
+    if sim.ndim != 2:
+        raise ValueError("similarity must be a 2D matrix")
+    n_src, n_tgt = sim.shape
+    src_ids = list(range(n_src))
+    tgt_ids = list(range(n_tgt))
+    if not src_ids or not tgt_ids:
+        return {}
+
+    clean = np.nan_to_num(sim, nan=-1.0, posinf=1.0, neginf=-1.0)
+    if allow_merge:
+        result = {}
+        available = clean[np.ix_(src_ids, tgt_ids)]
+        best_cols = np.argmax(available, axis=1)
+        for row, best_col in enumerate(best_cols):
+            value = float(available[row, best_col])
+            if value >= threshold:
+                result[src_ids[row]] = (tgt_ids[int(best_col)], value)
+        return result
+
+    scores = clean[np.ix_(src_ids, tgt_ids)]
+    n_rows, n_real_cols = scores.shape
+    # Dummy columns represent "leave unmatched" with zero benefit.  Invalid
+    # real pairs are negative, so the optimizer only uses them during the
+    # separate force-fill pass.
+    benefits = np.zeros((n_rows, n_real_cols + n_rows), dtype=np.float64)
+    valid = scores >= threshold
+    benefits[:, :n_real_cols] = np.where(valid, scores, -1.0)
+    chosen = _minimum_cost_assignment(-benefits)
+
+    result = {}
+    for row, col in enumerate(chosen):
+        if col < n_real_cols and valid[row, col]:
+            result[src_ids[row]] = (
+                tgt_ids[int(col)], float(scores[row, col]))
+    return result
+
+
+def greedy_assignment(similarity, threshold, allow_merge=False):
     """Greedy assignment on a similarity matrix.
 
     Walks all (src, tgt) pairs by descending similarity and accepts a pair
-    when both sides are still free.  ``locked_src`` / ``locked_tgt`` are
-    column indices already assigned by an earlier rule (e.g. identical
-    names); they stay exclusive even when ``allow_merge`` is on, which only
-    lets several *unlocked* source groups share a target group.
+    when both sides are still free.  With ``allow_merge``, several source
+    groups may share a target group.
 
     Returns ``{src_index: (tgt_index, similarity)}``.
     """
     sim = np.asarray(similarity)
     n_src = sim.shape[0]
-    locked_src = set(locked_src)
-    locked_tgt = set(locked_tgt)
 
     pairs = []
     for s in range(n_src):
-        if s in locked_src:
-            continue
         for t in np.argsort(sim[s])[::-1]:
             value = float(sim[s, t])
             if value < threshold:
@@ -58,13 +162,10 @@ def greedy_assignment(similarity, threshold, allow_merge=False,
             pairs.append((value, s, int(t)))
     pairs.sort(key=lambda p: (-p[0], p[1], p[2]))
 
-    used_t = set(locked_tgt)
     taken_greedy = set()
     assignment = {}
     for value, s, t in pairs:
         if s in assignment:
-            continue
-        if t in used_t:
             continue
         if t in taken_greedy and not allow_merge:
             continue
@@ -73,7 +174,7 @@ def greedy_assignment(similarity, threshold, allow_merge=False,
     return assignment
 
 
-def complete_assignment(similarity, assignment, locked_tgt=(), allow_merge=False):
+def complete_assignment(similarity, assignment, allow_merge=False):
     """Fill ``assignment`` so every source column ends up with a target.
 
     Used for "Match All (Force)".  Sources with a real weight signal are
@@ -92,22 +193,25 @@ def complete_assignment(similarity, assignment, locked_tgt=(), allow_merge=False
     """
     sim = np.asarray(similarity)
     n_src, n_tgt = sim.shape
+    if not n_tgt:
+        return assignment
     used_t = {t for t, _ in assignment.values()}
-    used_t.update(locked_tgt)
 
     remaining = [s for s in range(n_src) if s not in assignment]
-    row_max = sim.max(axis=1) if n_tgt else np.zeros(0)
+    row_max = sim.max(axis=1)
     weighted = [s for s in remaining if row_max[s] > 0.0]
     empties = [s for s in remaining if row_max[s] <= 0.0]
 
+    fallback_tgt = list(range(n_tgt))
+
     if allow_merge:
         def place(s):
-            t = int(np.argmax(sim[s]))
+            t = max(fallback_tgt, key=lambda t: (float(sim[s, t]), -t))
             return float(sim[s, t]), t
     else:
         def place(s):
             free = [t for t in range(n_tgt) if t not in used_t]
-            pool = free if free else range(n_tgt)
+            pool = free if free else fallback_tgt
             return max((float(sim[s, t]), t) for t in pool)
 
     for s in sorted(weighted, key=lambda s: (row_max[s], -s), reverse=True):
@@ -117,7 +221,7 @@ def complete_assignment(similarity, assignment, locked_tgt=(), allow_merge=False
 
     for s in empties:
         free = [t for t in range(n_tgt) if t not in used_t]
-        t = free[-1] if free else int(np.argmax(sim[s]))
+        t = free[-1] if free else fallback_tgt[0]
         assignment[s] = (t, 0.0)
         used_t.add(t)
     return assignment
@@ -128,5 +232,7 @@ def subsample_indices(indices, limit):
     indices = list(indices)
     if limit <= 0 or len(indices) <= limit:
         return indices
-    step = len(indices) / float(limit)
-    return [indices[int(i * step)] for i in range(limit)]
+    if limit == 1:
+        return [indices[0]]
+    last = len(indices) - 1
+    return [indices[(i * last) // (limit - 1)] for i in range(limit)]

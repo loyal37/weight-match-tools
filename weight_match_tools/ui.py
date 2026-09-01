@@ -2,7 +2,7 @@
 
 import bpy
 
-from .i18n import tr
+from .i18n import register_rna_class, tr, unregister_rna_class
 
 
 class WEIGHTMATCH_UL_mapping(bpy.types.UIList):
@@ -13,7 +13,9 @@ class WEIGHTMATCH_UL_mapping(bpy.types.UIList):
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
             row = layout.row(align=True)
             row.prop(item, "enabled", text="")
-            row.label(text=item.source_name, icon='GROUP_VERTEX')
+            side = f" [{'+X' if item.source_side == 'POS' else '-X'}]" \
+                if item.source_side else ""
+            row.label(text=item.source_name + side, icon='GROUP_VERTEX')
             row.label(text="", icon='TRIA_RIGHT')
             row.prop(item, "target_enum", text="")
             row.label(text=f"{item.similarity * 100:.0f}%")
@@ -23,10 +25,12 @@ class WEIGHTMATCH_UL_mapping(bpy.types.UIList):
 
 
 class WEIGHTMATCH_PT_main(bpy.types.Panel):
-    bl_label = tr("Weight Match")
+    # The add-on identity stays English.  The language switch only rebuilds
+    # labels and descriptions inside this panel.
+    bl_label = "Weight Match"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = tr("Weight Match")
+    bl_category = "Weight Match"
 
     def draw(self, context):
         s = context.scene.weight_match
@@ -50,7 +54,6 @@ class WEIGHTMATCH_PT_main(bpy.types.Panel):
             col.prop(s, "min_weight")
         if s.match_mode == 'WEIGHT':
             col.prop(s, "sample_limit")
-        col.prop(s, "prefer_same_name")
         col.prop(s, "allow_merge")
         col.prop(s, "force_match_all")
         col.prop(s, "use_selected_only")
@@ -67,8 +70,6 @@ class WEIGHTMATCH_PT_main(bpy.types.Panel):
                           rows=6 if s.items else 1)
 
         col = box.column(align=True)
-        col.prop(s, "create_missing")
-        col.prop(s, "reorder_to_target")
         col.operator("weight_match.apply_rename", icon='CHECKMARK')
         col.prop(s, "normalize_after")
         col.operator("weight_match.transfer_weights", icon='MOD_VERTEX_WEIGHT')
@@ -86,9 +87,9 @@ classes = (
 
 def register():
     for cls in classes:
-        bpy.utils.register_class(cls)
+        register_rna_class(cls)
 
 
 def unregister():
     for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+        unregister_rna_class(cls)

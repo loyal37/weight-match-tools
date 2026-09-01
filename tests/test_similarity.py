@@ -13,7 +13,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "weight_match_tools"))
 
 from similarity import (complete_assignment, cosine_similarity_matrix,
-                        greedy_assignment, normalized_name, subsample_indices)
+                        greedy_assignment, normalized_name, optimal_assignment,
+                        subsample_indices)
 
 failures = []
 
@@ -64,22 +65,24 @@ check(a.get(1) == (1, 1.0), "B -> Y")
 check(a.get(2) == (2, 1.0), "C -> Z")
 check(a.get(3) == (0, 1.0), "duplicate D merges into X when merge allowed")
 
-print("greedy_assignment (locks)")
-a = greedy_assignment(sim, threshold=0.6, allow_merge=True,
-                      locked_src={0}, locked_tgt={2})
-check(0 not in a, "locked source column skipped")
-check(a.get(1) == (1, 1.0), "B -> Y unchanged")
-check(a.get(3) == (0, 1.0), "D takes X while A is locked away")
-check(abs(a.get(2, (9, 0))[1] - 2 / (2 * np.sqrt(2))) < 1e-6,
-      "C merges into the leftover X at 0.7071 when merge allowed")
-a = greedy_assignment(sim, threshold=0.6, allow_merge=False,
-                     locked_src={0}, locked_tgt={2})
-check(2 not in a, "C left unmatched with merge off: its targets are taken")
-
 print("greedy_assignment (threshold)")
 a = greedy_assignment(sim, threshold=0.8)
 check(set(a) == {0, 1, 2}, "only the 1.0 pairs survive a high threshold")
 
+print("optimal_assignment")
+trap = np.array([[0.90, 0.80],
+                 [0.89, 0.00]], dtype=np.float32)
+a = optimal_assignment(trap, threshold=0.5)
+check(a.get(0, (None,))[0] == 1 and a.get(1, (None,))[0] == 0,
+      f"global assignment avoids greedy trap (got {a})")
+a = optimal_assignment(trap, threshold=0.5, allow_merge=True)
+check(a.get(0, (None,))[0] == 0 and a.get(1, (None,))[0] == 0,
+      f"many-to-one independently chooses each best target (got {a})")
+confidence = np.array([[0.99, 0.36],
+                       [0.36, 0.00]], dtype=np.float32)
+a = optimal_assignment(confidence, threshold=0.35)
+check(a.get(0, (None,))[0] == 0 and 1 not in a,
+      f"one near-certain pair is not sacrificed for two threshold pairs (got {a})")
 print("complete_assignment (force fill)")
 # 6 source groups over 3 verts; A and D identical, C/E/F all-zero (empty)
 groups = np.array([[1.0, 0.0, 0.5],   # A
@@ -111,9 +114,11 @@ check(full_m[4][0] == 0 and full_m[5][0] == 0,
 print("subsample_indices")
 sub = subsample_indices(list(range(100)), 10)
 check(len(sub) == 10, "thinned to limit")
-check(sub[0] == 0 and sub[-1] == 90, "even stride covers the range")
+check(sub[0] == 0 and sub[-1] == 99, "even stride includes both endpoints")
 check(subsample_indices(list(range(5)), 10) == [0, 1, 2, 3, 4],
       "shorter lists pass through")
+check(complete_assignment(np.zeros((2, 0)), {}) == {},
+      "force-fill handles a target with no groups defensively")
 
 print()
 if failures:

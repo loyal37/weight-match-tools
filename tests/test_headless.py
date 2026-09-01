@@ -183,6 +183,15 @@ mapping = {k: v[0] for k, v in mapping_of(s).items()}
 check(mapping == {"A-1": "a_1", "same": "same"},
       f"NAME mapping ignores punctuation/case (got {mapping})")
 
+# Normalized-name collisions must not silently become many-to-one unless the
+# corresponding option is enabled.  The exact pair gets priority.
+nsrc.vertex_groups.new(name="a_1")
+ntgt.vertex_groups.new(name="A.1")
+bpy.ops.weight_match.auto_match()
+mapping = {k: v[0] for k, v in mapping_of(s).items()}
+check(mapping.get("a_1") == "a_1" and mapping.get("A-1") == "A.1",
+      f"NAME collision stays one-to-one and prefers the exact pair (got {mapping})")
+
 print("=== Scenario D: rename with merge into existing group ===")
 clear_scene()
 bpy.ops.mesh.primitive_cube_add(size=2, location=(0.0, 0.0, 0.0))
@@ -203,7 +212,6 @@ mtgt.vertex_groups.new(name="B")
 s = bpy.context.scene.weight_match
 s.source_object = msrc
 s.target_object = mtgt
-s.create_missing = False
 s.items.clear()
 row = s.items.add()
 row.source_name = "A"
@@ -225,7 +233,7 @@ clear_scene()
 fsrc = new_sphere("src_force", (0.0, 0.0, 0.0), 16)
 paint(fsrc, "a", lambda co: clamp(co.z))       # will match 'x'
 paint(fsrc, "b", lambda co: clamp(-co.z))      # will match 'y'
-fsrc.vertex_groups.new(name="e1")              # empty -> must still get a number
+fsrc.vertex_groups.new(name="e1")              # empty -> excluded from matching
 fsrc.vertex_groups.new(name="e2")
 
 ftgt = new_sphere("tgt_force", (4.0, 0.0, 0.0), 16)
@@ -242,12 +250,10 @@ s.force_match_all = True
 bpy.ops.weight_match.auto_match()
 
 mapping = {k: v[0] for k, v in mapping_of(s).items()}
-check(len(s.items) == 4 and all(it.target_name for it in s.items),
-      f"force: every source group got a target (got {mapping})")
+check(len(s.items) == 2 and set(mapping) == {"a", "b"},
+      f"force: only weighted source groups participate (got {mapping})")
 check(mapping.get("a") == "x" and mapping.get("b") == "y",
       f"force: strong pairs untouched (got {mapping})")
-check(len({it.target_name for it in s.items}) == 3,
-      "force: surplus groups share targets (many-to-one)")
 a_count = sum(1 for v in fsrc.data.vertices
               for g in v.groups if g.group == fsrc.vertex_groups["a"].index)
 bpy.ops.weight_match.apply_rename()
@@ -255,7 +261,7 @@ names = {vg.name for vg in fsrc.vertex_groups}
 check(names == {"x", "y", "z"},
       f"force+apply: source groups == target's set (got {sorted(names)})")
 check([vg.name for vg in fsrc.vertex_groups] == ["x", "y", "z"],
-      f"force+apply: group order matches target (got "
+      f"force+apply: count, names and order match target (got "
       f"{[vg.name for vg in fsrc.vertex_groups]})")
 xvg = fsrc.vertex_groups["x"]
 x_count = sum(1 for v in fsrc.data.vertices
@@ -288,9 +294,8 @@ check(mapping.get("p") == "top", f"strong pair kept (got {mapping})")
 check(mapping.get("w") == "top",
       f"weak top blob merges into already-taken 'top', not a free wrong one "
       f"(got {mapping})")
-check(mapping.get("e1") in ("mid", "foot") and mapping.get("e2") in ("mid", "foot")
-      and mapping.get("e1") != mapping.get("e2"),
-      f"empties spread over the free targets (got {mapping})")
+check(set(mapping) == {"p", "w"},
+      f"empty source groups do not enter force-fill (got {mapping})")
 s.similarity_threshold = 0.6
 
 print("=== Scenario G: many-to-one transfer sums weights ===")
@@ -332,6 +337,7 @@ s.source_object = lang_src  # keep some state across the switch
 s.items.clear()
 row = s.items.add()
 row.source_name = "p"
+row.source_side = "POS"
 row.target_name = "top"
 row.similarity = 0.9
 
@@ -346,15 +352,27 @@ check(source_object_label() == "源物体",
 check(bpy.context.window_manager.wmt_lang.language == 'zh_CN',
       "language property defaults to zh_CN")
 
-i18n.apply_language('en_US')
+# Exercise the real property-update/deferred-callback path used by the UI.
+bpy.context.window_manager.wmt_lang.language = 'en_US'
+if bpy.app.timers.is_registered(i18n._apply_deferred):
+    bpy.app.timers.unregister(i18n._apply_deferred)
+i18n._apply_deferred()
 check(source_object_label() == "Source",
       f"switch to English (got {source_object_label()!r})")
 s2 = bpy.context.scene.weight_match
 check(s2.source_object.name == "src_lang" and len(s2.items) == 1
-      and s2.items[0].target_name == "top",
+      and s2.items[0].target_name == "top"
+      and s2.items[0].source_side == "POS",
       "settings and mapping rows survive the language switch")
+check(hasattr(bpy.types, "WEIGHTMATCH_PT_main")
+      and bpy.types.WEIGHTMATCH_PT_main.bl_category == "Weight Match"
+      and bpy.types.WEIGHTMATCH_PT_main.bl_label == "Weight Match",
+      "add-on panel identity remains English after switching language")
 
-i18n.apply_language('zh_CN')
+bpy.context.window_manager.wmt_lang.language = 'zh_CN'
+if bpy.app.timers.is_registered(i18n._apply_deferred):
+    bpy.app.timers.unregister(i18n._apply_deferred)
+i18n._apply_deferred()
 check(source_object_label() == "源物体", "switch back to Chinese")
 s3 = bpy.context.scene.weight_match
 check(len(s3.items) == 1 and s3.items[0].source_name == "p",
@@ -414,6 +432,163 @@ x_count = sum(1 for v in b1.data.vertices
 check(x_count == a_count, f"batch: b1 'x' kept 'a' weights ({x_count} == {a_count})")
 check(s.source_object.name == "bat_2",
       "batch: mapping table left on the last processed source")
+
+print("=== Scenario J: large Unicode target enum remains stable ===")
+clear_scene()
+bpy.ops.mesh.primitive_plane_add(size=1)
+usrc = bpy.context.active_object
+paint(usrc, "来源组", lambda _co: 1.0)
+bpy.ops.mesh.primitive_plane_add(size=1, location=(3.0, 0.0, 0.0))
+utgt = bpy.context.active_object
+for i in range(450):
+    utgt.vertex_groups.new(name=f"辅助骨骼_{i}")
+paint(utgt, "上半身3", lambda _co: 1.0)
+
+s = bpy.context.scene.weight_match
+s.source_object = usrc
+s.target_object = utgt
+s.match_mode = 'WEIGHT'
+s.similarity_threshold = 0.5
+
+from weight_match_tools import properties
+enum_a = properties._target_group_items(None, bpy.context)
+enum_b = properties._target_group_items(None, bpy.context)
+check(enum_a is enum_b and len(enum_a) == 452,
+      "dynamic enum reuses a persistent list for 451 Unicode group names")
+entry = next(item for item in enum_a if item[0] == "上半身3")
+check(entry[0] is entry[1], "Unicode enum identifier and label are stable strings")
+bpy.ops.weight_match.auto_match()
+check(len(s.items) == 1 and s.items[0].target_name == "上半身3",
+      f"automatic mapping can write Unicode target name (got {mapping_of(s)})")
+
+print("=== Scenario K: same names are not locked across LODs ===")
+clear_scene()
+lsrc = new_cube("src_lod", (0.0, 0.0, 0.0))
+paint_box(lsrc, "same", "x", -1)
+paint_box(lsrc, "other", "z", 1)
+ltgt = new_cube("tgt_lod", (5.0, 0.0, 0.0))
+# Deliberately swap the weight regions while keeping the same two names.
+paint_box(ltgt, "same", "z", 1)
+paint_box(ltgt, "other", "x", -1)
+
+s = bpy.context.scene.weight_match
+s.source_object = lsrc
+s.target_object = ltgt
+s.match_mode = 'WEIGHT'
+s.similarity_threshold = 0.8
+bpy.ops.weight_match.auto_match()
+mapping = {k: v[0] for k, v in mapping_of(s).items()}
+check(mapping == {"same": "other", "other": "same"},
+      f"same names follow weight evidence instead of being locked (got {mapping})")
+check("prefer_same_name" not in s.bl_rna.properties,
+      "same-name locking option is absent from settings")
+
+print("=== Scenario L: soft left/right tie-breaking ===")
+clear_scene()
+side_src = new_cube("src_side", (0.0, 0.0, 0.0))
+paint_box(side_src, "Right_elbow", "x", -1)
+side_tgt = new_cube("tgt_side", (4.0, 0.0, 0.0))
+paint(side_tgt, "ひじ補助.L", lambda _co: 1.0)
+paint(side_tgt, "ひじ補助.R", lambda _co: 1.0)
+s = bpy.context.scene.weight_match
+s.source_object = side_src
+s.target_object = side_tgt
+s.match_mode = 'WEIGHT'
+s.similarity_threshold = 0.5
+s.allow_merge = True
+s.force_match_all = False
+bpy.ops.weight_match.auto_match()
+mapping = {k: v[0] for k, v in mapping_of(s).items()}
+check(mapping.get("Right_elbow") == "ひじ補助.R",
+      f"symmetric field uses same-side name as a soft tiebreak (got {mapping})")
+
+print("=== Scenario M: deform candidates, complete target template ===")
+clear_scene()
+meta_src = new_cube("src_meta", (0.0, 0.0, 0.0))
+paint(meta_src, "Right_part", lambda _co: 1.0)
+meta_tgt = new_cube("tgt_meta", (4.0, 0.0, 0.0))
+paint(meta_tgt, "Bone.R", lambda _co: 1.0)
+paint(meta_tgt, "mmd_vertex_order", lambda _co: 1.0)
+
+arm_data = bpy.data.armatures.new("meta_arm_data")
+arm_obj = bpy.data.objects.new("meta_arm", arm_data)
+bpy.context.collection.objects.link(arm_obj)
+bpy.context.view_layer.objects.active = arm_obj
+arm_obj.select_set(True)
+bpy.ops.object.mode_set(mode='EDIT')
+bone = arm_data.edit_bones.new("Bone.R")
+bone.head = (0.0, 0.0, 0.0)
+bone.tail = (0.0, 0.0, 1.0)
+bpy.ops.object.mode_set(mode='OBJECT')
+modifier = meta_tgt.modifiers.new("Armature", 'ARMATURE')
+modifier.object = arm_obj
+
+s = bpy.context.scene.weight_match
+s.source_object = meta_src
+s.target_object = meta_tgt
+s.match_mode = 'WEIGHT'
+s.similarity_threshold = 0.5
+s.allow_merge = False
+s.force_match_all = True
+bpy.ops.weight_match.auto_match()
+mapping = {k: v[0] for k, v in mapping_of(s).items()}
+check(mapping == {"Right_part": "Bone.R"},
+      f"non-bone metadata is excluded from automatic candidates (got {mapping})")
+bpy.ops.weight_match.apply_rename()
+check([vg.name for vg in meta_src.vertex_groups] ==
+      [vg.name for vg in meta_tgt.vertex_groups],
+      "Apply still reproduces the complete target template including metadata")
+
+print("=== Scenario N: bilateral mirrored group splits into two targets ===")
+clear_scene()
+split_src = new_cube("src_split", (0.0, 0.0, 0.0))
+paint(split_src, "Right_sleeve", lambda _co: 1.0)
+split_tgt = new_cube("tgt_split", (4.0, 0.0, 0.0))
+paint_box(split_tgt, "Arm.L", "x", 1)
+paint_box(split_tgt, "Arm.R", "x", -1)
+
+s = bpy.context.scene.weight_match
+s.source_object = split_src
+s.target_object = split_tgt
+s.match_mode = 'WEIGHT'
+s.similarity_threshold = 0.5
+s.allow_merge = False
+s.force_match_all = True
+bpy.ops.weight_match.auto_match()
+split_rows = {(it.source_side, it.target_name) for it in s.items
+              if it.source_name == "Right_sleeve"}
+check(split_rows == {('POS', 'Arm.L'), ('NEG', 'Arm.R')},
+      f"bilateral group becomes +X/-X mapping rows (got {split_rows})")
+bpy.ops.weight_match.apply_rename()
+check([vg.name for vg in split_src.vertex_groups] == ["Arm.L", "Arm.R"],
+      "bilateral Apply still exactly follows target names/order")
+left = split_src.vertex_groups["Arm.L"]
+right = split_src.vertex_groups["Arm.R"]
+left_members = {v.index for v in split_src.data.vertices for g in v.groups
+                if g.group == left.index and g.weight > .9}
+right_members = {v.index for v in split_src.data.vertices for g in v.groups
+                 if g.group == right.index and g.weight > .9}
+check(left_members and all(split_src.data.vertices[i].co.x > 0
+                           for i in left_members),
+      "+X half is isolated in Arm.L")
+check(right_members and all(split_src.data.vertices[i].co.x < 0
+                            for i in right_members),
+      "-X half is isolated in Arm.R")
+
+print("=== Scenario O: disable and re-enable after language switching ===")
+weight_match_tools.unregister()
+check(not hasattr(bpy.types, "WEIGHTMATCH_PT_main")
+      and not hasattr(bpy.types.WindowManager, "wmt_lang"),
+      "disable removes UI and language RNA classes cleanly")
+weight_match_tools.register()
+reenabled = {
+    "panel": hasattr(bpy.types, "WEIGHTMATCH_PT_main"),
+    "language": (hasattr(bpy.types.WindowManager, "wmt_lang")
+                 and bpy.context.window_manager.wmt_lang is not None),
+    "settings": hasattr(bpy.types.Scene, "weight_match"),
+}
+check(all(reenabled.values()),
+      f"add-on can be enabled again after language switching (got {reenabled})")
 
 print()
 result_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),

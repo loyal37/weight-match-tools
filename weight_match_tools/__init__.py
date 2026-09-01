@@ -11,17 +11,17 @@ Blender 4.2+ extension.  See README.md for the full workflow.
 
 if "bpy" in locals():
     import importlib
+    # Reload i18n too so hot-deployed schema changes do not leave stale
+    # snapshot fields or class helpers in memory.  Registration is recovered
+    # safely by the RNA helpers in that module.
+    importlib.reload(i18n)
     importlib.reload(similarity)
     importlib.reload(matching)
     importlib.reload(properties)
     importlib.reload(operators)
     importlib.reload(ui)
 else:
-    from . import similarity, matching, properties, operators, ui
-
-# i18n is imported but never reloaded: it owns the language choice and its
-# registered WindowManager property must survive script reloads.
-from . import i18n
+    from . import i18n, similarity, matching, properties, operators, ui
 
 import bpy
 

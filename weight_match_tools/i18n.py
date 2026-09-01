@@ -16,9 +16,14 @@ from bpy.props import EnumProperty, PointerProperty
 # Preserved across module reloads (importlib.reload keeps the namespace).
 LANG = globals().get("LANG", "zh_CN")
 
+# Keep the exact Python class objects handed to Blender.  Some RNA types (in
+# particular operators) cannot reliably be recovered through bpy.types by
+# their Python class name, and module reloads replace the module's class
+# objects.  The registry itself survives importlib.reload().
+_REGISTERED_CLASSES = globals().get("_REGISTERED_CLASSES", {})
+
 ZH = {
     # panel / tab
-    "Weight Match": "权重匹配",
     "Matching": "匹配设置",
     "Mapping": "映射表",
 
@@ -35,10 +40,10 @@ ZH = {
     # settings: matching options
     "Match Mode": "匹配模式",
     "Weight Field": "权重场",
-    "Sample each source group's weights onto the target surface and "
-    "compare against the target groups' weight fields "
+    "Sample the target weight fields onto the source surface "
+    "and compare them with each weighted source group "
     "(most accurate, recommended)":
-        "把源顶点组的权重采样到目标表面，与目标各顶点组的权重场对比"
+        "把目标权重场采样到源物体表面，与源侧各非空权重组对比"
         "（最准确，推荐）",
     "Spatial Centroid": "空间质心",
     "Match each group's weighted average position "
@@ -51,25 +56,19 @@ ZH = {
     "Min Similarity": "最小相似度",
     "Pairs below this similarity are left unmatched":
         "低于该相似度的配对不匹配（留空待手动指定）",
-    "Lock Same Names": "锁定同名组",
-    "Groups whose names are identical on both sides are "
-    "matched first and excluded from automatic assignment":
-        "两边同名的顶点组直接锁定配对，不参与自动分配",
     "Allow Many-to-One": "允许多对一",
     "Let several source groups match the same target group "
     "(their weights are merged on Apply)":
         "允许多个源顶点组匹配到同一个目标顶点组"
         "（应用/转移时权重合并），适合源模型骨骼划分更细的情况",
     "Match All (Force)": "全量匹配（强制）",
-    "Give every unmatched source group a target too: good "
+    "Give every unmatched weighted source group a target: good "
     "matches keep their 1:1 pairs, the rest take the closest "
-    "remaining target (empty groups go last).  Use this when "
-    "the source must end up with exactly the target's group "
-    "names, e.g. numeric bone ids 0..N":
-        "让每个未匹配的源组也获得目标：高质量配对保持 1:1 不变，"
-        "其余按相似度认领剩余目标组（空组排最后）。"
-        "当源物体必须恰好使用目标的全部组名时勾选，"
-        "例如 0~N 的数字骨骼编号",
+    "remaining weighted deform group. Empty groups do not "
+    "participate; Apply rebuilds them from the target":
+        "让每个未匹配的非空源组也获得目标：高质量配对保持 1:1 不变，"
+        "其余按相似度认领非空骨骼目标组。空组不参与匹配，"
+        "应用时按目标模板重新补齐",
     "Selected Vertices Only": "仅用选中顶点",
     "Only consider selected vertices of the target object "
     "(falls back to all vertices if nothing is selected)":
@@ -78,21 +77,11 @@ ZH = {
     "Weights at or below this are ignored in centroid mode":
         "质心模式下忽略小于等于该值的权重",
     "Sample Limit": "采样上限",
-    "Maximum number of target vertices used for matching "
+    "Maximum number of surface vertices used for matching "
     "(Transfer always uses every affected vertex)":
-        "匹配时最多采样多少目标顶点（权重转移始终处理全部受影响顶点）",
+        "匹配时最多采样多少表面顶点（权重转移始终处理全部受影响顶点）",
 
     # settings: apply / transfer options
-    "Fill Missing Groups": "补齐缺失组",
-    "After Apply: create empty vertex groups on the source "
-    "for target groups that received no weights":
-        "应用后：为没有获得权重的目标组在源物体上创建空顶点组",
-    "Match Target Order": "按目标顺序排列",
-    "After Apply: rebuild the source's vertex group list in "
-    "the same order as the target object (weights follow by "
-    "name, bindings are unaffected)":
-        "应用后：把源物体的顶点组列表按目标物体的顺序重建"
-        "（权重按名字跟随，骨架绑定不受影响）",
     "Normalize": "归一化",
     "After Transfer: rescale each affected vertex's total "
     "weight to 1.0":
@@ -100,6 +89,10 @@ ZH = {
 
     # mapping table rows
     "Source Group": "源顶点组",
+    "Source Side": "源空间侧",
+    "Internal spatial half used when a bilateral source "
+    "group is split automatically":
+        "双侧源顶点组自动拆分时使用的内部空间半侧",
     "Target Group": "目标顶点组",
     "Which target vertex group this source group becomes":
         "这个源顶点组将变成哪个目标顶点组",
@@ -154,6 +147,48 @@ def tr(text):
     return text
 
 
+def register_rna_class(cls):
+    """Register ``cls``, recovering an orphan with the same RNA name."""
+    key = cls.__name__
+    previous = _REGISTERED_CLASSES.pop(key, None)
+    current = getattr(bpy.types, key, None)
+    seen = set()
+    for candidate in (previous, cls, current):
+        if candidate is None or id(candidate) in seen:
+            continue
+        seen.add(id(candidate))
+        if not hasattr(candidate, "bl_rna"):
+            continue
+        try:
+            bpy.utils.unregister_class(candidate)
+        except RuntimeError as exc:
+            if "missing bl_rna attribute" not in str(exc):
+                raise
+    bpy.utils.register_class(cls)
+    _REGISTERED_CLASSES[key] = cls
+
+
+def unregister_rna_class(cls):
+    """Unregister the class Blender actually owns, not a stale reload copy."""
+    key = cls.__name__
+    previous = _REGISTERED_CLASSES.pop(key, None)
+    current = getattr(bpy.types, key, None)
+    seen = set()
+    for candidate in (previous, cls, current):
+        if candidate is None or id(candidate) in seen:
+            continue
+        seen.add(id(candidate))
+        if not hasattr(candidate, "bl_rna"):
+            continue
+        try:
+            bpy.utils.unregister_class(candidate)
+        except RuntimeError as exc:
+            # A failed hot reload may leave a Python class name around after
+            # its RNA registration is already gone.
+            if "missing bl_rna attribute" not in str(exc):
+                raise
+
+
 # ---------------------------------------------------------------------------
 # language switching
 
@@ -185,9 +220,9 @@ def _apply_deferred():
 
 # fields carried across a language switch
 _SNAPSHOT_SIMPLE = (
-    "match_mode", "similarity_threshold", "prefer_same_name", "allow_merge",
-    "force_match_all", "use_selected_only", "min_weight", "sample_limit",
-    "create_missing", "reorder_to_target", "normalize_after", "active_index",
+    "match_mode", "similarity_threshold", "allow_merge", "force_match_all",
+    "use_selected_only", "min_weight", "sample_limit",
+    "normalize_after", "active_index",
 )
 
 
@@ -200,9 +235,10 @@ def _snapshot():
         data[scene.name] = {
             "source": s.source_object.name if s.source_object else "",
             "target": s.target_object.name if s.target_object else "",
-            "simple": {f: getattr(s, f) for f in _SNAPSHOT_SIMPLE},
-            "items": [(it.source_name, it.target_name, it.similarity,
-                       it.enabled) for it in s.items],
+            "simple": {f: getattr(s, f) for f in _SNAPSHOT_SIMPLE
+                       if hasattr(s, f)},
+            "items": [(it.source_name, it.source_side, it.target_name,
+                       it.similarity, it.enabled) for it in s.items],
         }
     return data
 
@@ -217,12 +253,16 @@ def _restore(data):
         s.source_object = bpy.data.objects.get(d["source"]) if d["source"] else None
         s.target_object = bpy.data.objects.get(d["target"]) if d["target"] else None
         for f, v in d["simple"].items():
-            setattr(s, f, v)
+            if hasattr(s, f):
+                setattr(s, f, v)
+        valid_targets = ({vg.name for vg in s.target_object.vertex_groups}
+                         if s.target_object else set())
         s.items.clear()
-        for src, tgt, sim, enabled in d["items"]:
+        for src, side, tgt, sim, enabled in d["items"]:
             it = s.items.add()
             it.source_name = src
-            it.target_enum = tgt if tgt else KEEP
+            it.source_side = side
+            it.target_enum = tgt if tgt in valid_targets else KEEP
             it.similarity = sim
             it.enabled = enabled
         s.active_index = d["simple"]["active_index"]
@@ -236,11 +276,14 @@ def apply_language(lang):
     from . import properties, operators, ui
 
     snap = _snapshot()
-    for module in (ui, operators, properties):
-        for cls in reversed(getattr(module, "classes", ())):
-            bpy.utils.unregister_class(cls)
+    # Remove the RNA pointer before unregistering its PropertyGroup types.
+    # Doing this in the opposite order can leave a half-unregistered panel if
+    # Blender rejects the class teardown during the deferred UI callback.
     if hasattr(bpy.types.Scene, "weight_match"):
         del bpy.types.Scene.weight_match
+    for module in (ui, operators, properties):
+        for cls in reversed(getattr(module, "classes", ())):
+            unregister_rna_class(cls)
 
     importlib.reload(properties)
     importlib.reload(operators)
@@ -248,7 +291,7 @@ def apply_language(lang):
 
     for module in (properties, operators, ui):
         for cls in module.classes:
-            bpy.utils.register_class(cls)
+            register_rna_class(cls)
     bpy.types.Scene.weight_match = PointerProperty(
         type=properties.WeightMatchSettings)
     _restore(snap)
@@ -259,12 +302,15 @@ classes = (WeightMatchLangPrefs,)
 
 def register():
     for cls in classes:
-        bpy.utils.register_class(cls)
+        register_rna_class(cls)
+    if hasattr(bpy.types.WindowManager, "wmt_lang"):
+        del bpy.types.WindowManager.wmt_lang
     bpy.types.WindowManager.wmt_lang = PointerProperty(
         type=WeightMatchLangPrefs)
 
 
 def unregister():
-    del bpy.types.WindowManager.wmt_lang
+    if hasattr(bpy.types.WindowManager, "wmt_lang"):
+        del bpy.types.WindowManager.wmt_lang
     for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+        unregister_rna_class(cls)
